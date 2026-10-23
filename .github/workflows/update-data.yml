@@ -1,0 +1,64 @@
+# Rebuilds data/projects.json whenever projects.csv changes, and every Monday so that
+# changes organizers make to their project locations are picked up.
+name: Update boundary data
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - projects.csv
+      - lib/**
+      - scripts/**
+      - .github/workflows/update-data.yml
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC
+  workflow_dispatch:       # "Run workflow" button on the Actions tab
+
+permissions:
+  contents: write
+
+# one build at a time; a later change waits for the running build instead of cancelling it
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install --no-audit --no-fund
+
+      # full-precision boundaries from earlier runs, so only new or changed places are downloaded
+      - uses: actions/cache/restore@v4
+        with:
+          path: .cache
+          key: boundaries-${{ github.run_id }}
+          restore-keys: boundaries-
+
+      - run: node scripts/build.mjs
+
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .cache
+          key: boundaries-${{ github.run_id }}
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "Boundary data unchanged"
+            exit 0
+          fi
+          git commit -m "Update boundary data"
+          git pull --rebase
+          git push

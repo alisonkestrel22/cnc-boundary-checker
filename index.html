@@ -1,0 +1,802 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CNC Boundary Check</title>
+<!--
+  City Nature Challenge boundary check.
+
+  Anyone with the link can view the map and check projects. Organizers who sign in with a
+  GitHub token can add, remove and replace projects: the page commits projects.csv and
+  data/projects.json to the repository together (see README.md). The GitHub Action also
+  rebuilds the data every Monday to pick up location changes.
+-->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.1.0/turf.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f4f4f2; --surface: #fcfcfb; --border: #dddcd7;
+    --text: #0b0b0b; --text-2: #52514e; --text-3: #7a7974;
+    --accent: #2a78d6; --critical: #d03b3b; --critical-bg: #fbeaea;
+    --serious: #ec835a; --good: #0ca30c; --good-bg: #e8f5e8; --warn-ink: #8a5d00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #121211; --surface: #1a1a19; --border: #33332f;
+      --text: #f0efec; --text-2: #c3c2b7; --text-3: #8f8e86;
+      --accent: #3987e5; --critical-bg: #3a1c1c; --good-bg: #17301a; --warn-ink: #fab219;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #121211; --surface: #1a1a19; --border: #33332f;
+    --text: #f0efec; --text-2: #c3c2b7; --text-3: #8f8e86;
+    --accent: #3987e5; --critical-bg: #3a1c1c; --good-bg: #17301a; --warn-ink: #fab219;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-columns: 420px 1fr; height: 100vh;
+  }
+  #side { overflow-y: auto; border-right: 1px solid var(--border); background: var(--surface); }
+  #map { height: 100vh; }
+  header { padding: 16px 16px 8px; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin: 0 0 8px; }
+  section { padding: 12px 16px; border-top: 1px solid var(--border); }
+  .stats { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; font-size: 13px; color: var(--text-2); }
+  .chip b { color: var(--text); }
+  .chip.alert { border-color: var(--critical); color: var(--critical); }
+  .chip.alert b { color: var(--critical); }
+  .chip.warn { border-color: var(--warn-ink); color: var(--warn-ink); }
+  .chip.warn b { color: var(--warn-ink); }
+  .muted { color: var(--text-3); font-size: 12px; }
+  textarea { width: 100%; min-height: 96px; font: 12px/1.4 ui-monospace, Menlo, monospace; padding: 8px;
+             border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); resize: vertical; }
+  input[type=number], input[type=search], input[type=password], select {
+    padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); font: inherit; }
+  input[type=number] { width: 64px; }
+  input[type=search], input[type=password] { width: 100%; }
+  select { max-width: 100%; }
+  button, .btn { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+           border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.small { font-size: 12px; padding: 2px 8px; }
+  button.danger { color: var(--critical); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.link { border: none; background: none; padding: 0 4px; color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .limits { margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--bg); font-size: 12px; color: var(--text-2); }
+  .limits b { color: var(--text); }
+  #progress { margin-top: 8px; font-size: 13px; color: var(--text-2); min-height: 1em; }
+  #auth { margin-top: 8px; font-size: 13px; }
+  #authForm { margin-top: 8px; padding: 10px; border-radius: 6px; background: var(--bg); font-size: 13px; }
+  #authForm ol { margin: 6px 0; padding-left: 18px; }
+  .banner { margin: 0 16px 8px; padding: 10px 28px 10px 12px; border-radius: 6px; border-left: 4px solid var(--good);
+            background: var(--good-bg); font-size: 13px; position: relative; }
+  .banner.alert { border-left-color: var(--critical); background: var(--critical-bg); }
+  .banner .close { position: absolute; top: 4px; right: 6px; border: none; background: none; font-size: 16px; padding: 0 4px; }
+  .banner ul { margin: 6px 0 0; padding-left: 18px; }
+  ul.list { list-style: none; margin: 0; padding: 0; }
+  ul.list li { padding: 6px 0; border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+  ul.list li:last-child { border-bottom: none; }
+  .grow { flex: 1; min-width: 0; }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; margin-top: 4px; }
+  .swatch.candidate { background: transparent; border: 2px dashed var(--text); }
+  .icon-alert { color: var(--critical); font-weight: 700; flex: none; }
+  .icon-minor { color: var(--serious); font-weight: 700; flex: none; }
+  .icon-gap { color: var(--warn-ink); font-weight: 700; flex: none; }
+  .badge { font-size: 11px; border-radius: 4px; padding: 0 5px; background: var(--text-2); color: var(--surface); margin-left: 4px; }
+  .title { overflow-wrap: anywhere; }
+  .verdict { font-size: 12px; margin-top: 2px; }
+  .verdict.bad { color: var(--critical); }
+  .verdict.warn { color: var(--warn-ink); }
+  .verdict.ok { color: var(--good); }
+  .actions { flex-basis: 100%; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding-left: 20px; }
+  details > summary { cursor: pointer; color: var(--text-2); font-size: 13px; margin: 8px 0 4px; }
+  a { color: var(--accent); }
+  .leaflet-tooltip { font: 12px system-ui, sans-serif; }
+  .legend { background: var(--surface); color: var(--text); padding: 8px 10px; border-radius: 6px;
+            font-size: 12px; line-height: 1.6; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 6px; }
+  @media (max-width: 800px) {
+    body { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
+    #map { height: 55vh; order: -1; }
+    #side { border-right: none; overflow: visible; }
+  }
+</style>
+</head>
+<body>
+<aside id="side">
+  <header>
+    <h1>CNC boundary check</h1>
+    <div class="stats" id="stats"></div>
+    <div id="updated" class="muted" style="margin-top:6px"></div>
+    <div id="auth"></div>
+    <form id="authForm" hidden>
+      <div>Signing in lets you add, remove and replace projects. You need a GitHub account with access to
+        <span id="repoName"></span>, and a token from it:</div>
+      <ol>
+        <li>Open <a id="tokenLink" target="_blank" rel="noopener" href="https://github.com/settings/personal-access-tokens/new">GitHub’s new token page</a>.</li>
+        <li>Under <b>Repository access</b>, choose <b>Only select repositories</b> and pick this repository.</li>
+        <li>Under <b>Permissions → Repository permissions</b>, set <b>Contents</b> to <b>Read and write</b>.</li>
+        <li>Generate the token and paste it here.</li>
+      </ol>
+      <label for="token" class="muted">GitHub token</label>
+      <input type="password" id="token" autocomplete="off" spellcheck="false">
+      <div class="row">
+        <button class="primary" type="submit">Sign in</button>
+        <button type="button" id="authCancel">Cancel</button>
+      </div>
+      <p class="muted">The token is kept in this browser only. Use “Sign out” on shared computers.</p>
+    </form>
+  </header>
+  <div id="banners"></div>
+
+  <section>
+    <h2>Check a project</h2>
+    <textarea id="input" placeholder="Paste project links or slugs, one per line.&#10;&#10;You can also paste rows from the submissions spreadsheet: only rows with a Project Status of Approved or In Umbrella are used."></textarea>
+    <div class="row">
+      <button class="primary" id="checkBtn">Check</button>
+      <button id="clearBtn" hidden>Clear checked projects</button>
+    </div>
+    <div id="progress"></div>
+    <ul class="list" id="candidates"></ul>
+    <p class="muted" id="addHow"></p>
+    <div class="limits" id="limits"></div>
+  </section>
+
+  <section>
+    <h2>Overlaps between projects</h2>
+    <div id="overlaps"></div>
+  </section>
+
+  <section>
+    <h2>Gaps inside projects</h2>
+    <div id="gaps"></div>
+    <p class="muted" id="gapNote"></p>
+  </section>
+
+  <section>
+    <h2>Projects in the list</h2>
+    <input type="search" id="filter" placeholder="Filter projects">
+    <ul class="list" id="projects"></ul>
+    <div id="problems"></div>
+  </section>
+
+  <section>
+    <h2>Overlap threshold</h2>
+    <div>Flag an overlap when it covers at least
+      <input type="number" id="thPct" min="0" step="0.1"> % of the smaller project, <b>or</b> at least
+      <input type="number" id="thKm2" min="0" step="0.5"> km².</div>
+    <p class="muted">Smaller overlaps are listed as “below threshold”. They are usually slivers where two
+      boundary datasets don’t quite line up. Projects that share a border with no overlapping area count as touching, which is fine.
+      These settings only change what you see; they are remembered in this browser.</p>
+    <label class="muted"><input type="checkbox" id="showMinor"> Show below-threshold overlaps on the map</label>
+  </section>
+</aside>
+<div id="map"></div>
+
+<script type="module">
+import { SETTINGS, DEFAULT_THRESHOLD, classify, pairKey, boxesMeet, parseProjectList, summarizeSkips, createChecker }
+  from './lib/boundary-check.js';
+import { projectEntry, pairEntry, applyListChange } from './lib/build.js';
+
+// The repository this page saves to, as "owner/name". Worked out automatically on GitHub Pages
+// (owner.github.io/name); set it here if the page is hosted somewhere else.
+const REPO = location.hostname.endsWith('.github.io')
+  ? `${location.hostname.split('.')[0]}/${location.pathname.split('/')[1]}` : '';
+const BRANCH = 'main';
+const GITHUB_API = 'https://api.github.com';
+
+const MAX_PROJECTS_PER_CHECK = 50;
+const DAILY_REQUEST_BUDGET = 10000;   // iNat asks for <= 10,000 requests/day
+// Project colors only separate neighbours; red and orange are kept for overlaps, yellow for gaps.
+const COLORS = ['#2a78d6', '#1baf7a', '#e87ba4', '#008300', '#6250d6'];
+const CRITICAL = '#d03b3b', SERIOUS = '#ec835a', WARNING = '#fab219', CANDIDATE = '#0b0b0b';
+
+// ---------------------------------------------------------------- helpers
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtKm2 = v => v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2);
+const fmtPct = v => v >= 10 ? v.toFixed(0) : v >= 0.1 ? v.toFixed(1) : v.toFixed(2);
+const safe = (fn, fallback = null) => { try { return fn(); } catch (e) { return fallback; } };
+function store(key, val) {
+  try {
+    if (val === undefined) return JSON.parse(localStorage.getItem(key));
+    if (val === null) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify(val));
+  } catch (e) { return null; }
+}
+const setProgress = msg => { $('progress').textContent = msg || ''; };
+
+// ---------------------------------------------------------------- state
+
+const state = {
+  data: null,
+  projects: new Map(),     // slug -> project in the list (from data/projects.json), with .shape
+  pairs: new Map(),        // key -> pair between listed projects
+  colors: new Map(),       // slug -> color index
+  candidates: new Map(),   // slug -> project checked here and not in the list
+  candidatePairs: new Map(),
+  threshold: Object.assign({}, DEFAULT_THRESHOLD, store('cnc-threshold') || {}),
+  auth: null,              // { token, login } once signed in
+  replacing: null,         // slug of the candidate whose "Replace" picker is open
+  busy: false,
+};
+const title = slug => state.projects.get(slug)?.title || state.candidates.get(slug)?.title || slug;
+const thresholdClass = pair => classify(pair, state.threshold);
+
+// ---------------------------------------------------------------- iNat requests (for checks)
+
+function dailyCount(add = 0) {
+  const today = new Date().toISOString().slice(0, 10);
+  let d = store('cnc-daily') || {};
+  if (d.date !== today) d = { date: today, count: 0 };
+  d.count += add;
+  if (add) store('cnc-daily', d);
+  return d.count;
+}
+let queued = 0;
+const checker = createChecker({
+  turf,
+  log: setProgress,
+  onQueue: n => { queued = n; renderLimits(); },
+  beforeRequest: () => {
+    if (dailyCount() >= DAILY_REQUEST_BUDGET) throw new Error('Daily iNaturalist request budget reached; please continue tomorrow.');
+    dailyCount(1);
+  },
+});
+
+// ---------------------------------------------------------------- GitHub
+
+async function github(path, { method = 'GET', body, raw = false, token = state.auth?.token } = {}) {
+  const res = await fetch(`${GITHUB_API}${path}`, {
+    method,
+    cache: 'no-store',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: raw ? 'application/vnd.github.raw+json' : 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return res;
+}
+
+function githubError(res, path) {
+  if (res.status === 401) return new Error('GitHub did not accept your token. It may have expired: sign out and sign in with a new one.');
+  if (res.status === 403 || res.status === 404) return new Error(`Your token can’t change ${REPO}. Check that it has access to this repository with Contents set to Read and write.`);
+  return new Error(`GitHub returned ${res.status} for ${path}.`);
+}
+
+async function githubOk(path, opts) {
+  const res = await github(path, opts);
+  if (res.ok) return opts?.raw ? res.text() : res.json();
+  throw githubError(res, path);
+}
+
+async function signIn(token) {
+  const repoRes = await github(`/repos/${REPO}`, { token });
+  if (repoRes.status === 401) throw new Error('GitHub did not accept that token. Check that you copied all of it.');
+  if (!repoRes.ok) throw new Error(`That token can’t see ${REPO}. When creating it, choose this repository under Repository access.`);
+  const repo = await repoRes.json();
+  if (repo.permissions && !repo.permissions.push) throw new Error(`Your GitHub account can view ${REPO} but not change it. Ask the repository owner to give you write access.`);
+  const userRes = await github('/user', { token });
+  const login = userRes.ok ? (await userRes.json()).login : 'GitHub user';
+  state.auth = { token, login };
+  store('cnc-auth', state.auth);
+}
+
+function signOut() {
+  state.auth = null; state.replacing = null;
+  store('cnc-auth', null);
+  render();
+}
+
+// Commits a change to projects.csv and data/projects.json together. When someone else saved
+// in the meantime, starts again from their version (re-checking against any projects they added).
+async function saveChange({ add = [], remove = [], message }) {
+  const repo = `/repos/${REPO}`;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    setProgress('Saving to the list…');
+    const head = (await githubOk(`${repo}/git/ref/heads/${BRANCH}`)).object.sha;
+    const commit = await githubOk(`${repo}/git/commits/${head}`);
+    const [csv, dataText] = await Promise.all([
+      githubOk(`${repo}/contents/projects.csv?ref=${head}`, { raw: true }),
+      githubOk(`${repo}/contents/data/projects.json?ref=${head}`, { raw: true }),
+    ]);
+    const latest = JSON.parse(dataText);
+
+    // projects someone else added since this page loaded haven't been compared yet
+    const additions = [];
+    for (const c of add) {
+      for (const p of latest.projects) {
+        if (c.compared.has(p.slug) || remove.includes(p.slug)) continue;
+        setProgress(`Comparing ${c.title} with ${p.title}, added by someone else…`);
+        checker.addPlaceStubs(p.places);
+        const pair = await checker.comparePair(c, c.shape, p, shapeOf(p));
+        c.compared.add(p.slug);
+        if (pair) state.candidatePairs.set(pair.key, { ...pair, geometry: pair.geom });
+      }
+      const pairs = [...state.candidatePairs.values()].filter(p => p.a === c.slug || p.b === c.slug).map(pairEntry);
+      additions.push({ entry: projectEntry(turf, checker.places, c, c.shape, c.rawGaps), pairs });
+    }
+
+    const next = applyListChange(csv, latest, { add: additions, remove });
+    const tree = await githubOk(`${repo}/git/trees`, { method: 'POST', body: { base_tree: commit.tree.sha, tree: [
+      { path: 'projects.csv', mode: '100644', type: 'blob', content: next.csv },
+      { path: 'data/projects.json', mode: '100644', type: 'blob', content: JSON.stringify(next.data) + '\n' },
+    ] } });
+    const created = await githubOk(`${repo}/git/commits`, { method: 'POST', body: {
+      message: `${message}\n\nSaved from the boundary check page by ${state.auth.login}.`, tree: tree.sha, parents: [head] } });
+    const moved = await github(`${repo}/git/refs/heads/${BRANCH}`, { method: 'PATCH', body: { sha: created.sha } });
+    if (moved.ok) {
+      for (const c of add) state.candidates.delete(c.slug);
+      for (const [k, p] of state.candidatePairs) if (!state.candidates.has(p.a) && !state.candidates.has(p.b)) state.candidatePairs.delete(k);
+      loadData(next.data);
+      return;
+    }
+    // 422: someone else saved first. Go round again on top of their change.
+    if (moved.status !== 422) throw githubError(moved, 'the list');
+  }
+  throw new Error('Other people kept saving at the same moment. Wait a minute and try again.');
+}
+
+async function runSave(change, done) {
+  state.busy = true; renderSidebar();
+  try {
+    await saveChange(change);
+    banner(`${done} Everyone will see it within a minute or two.`);
+  } catch (e) {
+    console.error(e);
+    banner(`<b>Not saved.</b> ${esc(e.message)}`, true);
+  } finally {
+    state.busy = false; state.replacing = null; setProgress(''); render();
+  }
+}
+
+// ---------------------------------------------------------------- map
+
+const map = L.map('map', { preferCanvas: true, worldCopyJump: true }).setView([20, 0], 2);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 18, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
+const projectLayer = L.layerGroup().addTo(map);
+const markLayer = L.layerGroup().addTo(map);
+
+const legend = L.control({ position: 'bottomright' });
+legend.onAdd = () => {
+  const d = L.DomUtil.create('div', 'legend');
+  d.innerHTML = `<div><i style="background:${CRITICAL}"></i>Overlap (above threshold)</div>
+    <div><i style="background:${SERIOUS}"></i>Overlap below threshold</div>
+    <div><i style="background:${WARNING};outline:2px dashed #8a5d00;outline-offset:-2px"></i>Gap inside a project</div>
+    <div><i style="outline:2px dashed ${CANDIDATE};outline-offset:-2px"></i>Checked, not in the list</div>
+    <div class="muted">Project colors only separate neighbours.</div>`;
+  return d;
+};
+legend.addTo(map);
+
+function fitBox(b) { if (b) map.fitBounds([[b[1], b[0]], [b[3], b[2]]], { padding: [30, 30] }); }
+
+function marker(geom, color, radius, label, onClick) {
+  const pt = safe(() => turf.pointOnFeature(geom).geometry.coordinates);
+  if (!pt) return;
+  const m = L.circleMarker([pt[1], pt[0]], { radius, color: '#fff', weight: 2, fillColor: color, fillOpacity: 1 }).bindTooltip(label);
+  if (onClick) m.on('click', onClick);
+  m.addTo(markLayer);
+}
+
+function drawPair(pair) {
+  const kind = thresholdClass(pair);
+  if (kind === 'touch' || !pair.geometry || (kind === 'minor' && !$('showMinor').checked)) return;
+  const color = kind === 'overlap' ? CRITICAL : SERIOUS;
+  const label = `${esc(title(pair.a))} ↔ ${esc(title(pair.b))}<br>${fmtKm2(pair.km2)} km² overlap (${fmtPct(pair.pct)}% of the smaller project)`;
+  L.geoJSON(pair.geometry, { style: { color, weight: 2, fillColor: color, fillOpacity: 0.55 } }).bindTooltip(label, { sticky: true }).addTo(markLayer);
+  marker(pair.geometry, color, kind === 'overlap' ? 7 : 5, label, () => fitBox(turf.bbox(pair.geometry)));
+}
+
+function drawGaps(p) {
+  for (const gap of p.gaps || []) {
+    const label = `Gap inside ${esc(p.title)}<br>${fmtKm2(gap.km2)} km² not covered by any of its places`;
+    L.geoJSON(gap.geometry, { style: { color: '#8a5d00', weight: 2, dashArray: '5 4', fillColor: WARNING, fillOpacity: 0.55 } })
+      .bindTooltip(label, { sticky: true }).addTo(markLayer);
+    marker(gap.geometry, WARNING, 6, label, () => fitBox(turf.bbox(gap.geometry)));
+  }
+}
+
+function renderMap() {
+  projectLayer.clearLayers(); markLayer.clearLayers();
+  for (const p of state.projects.values()) {
+    if (!p.geometry) continue;
+    const color = COLORS[state.colors.get(p.slug) ?? 0];
+    L.geoJSON(p.geometry, { style: { color, weight: 1.5, fillColor: color, fillOpacity: 0.22, fillRule: 'nonzero' } })
+      .bindTooltip(esc(p.title), { sticky: true }).on('click', () => showProject(p.slug)).addTo(projectLayer);
+  }
+  for (const c of state.candidates.values()) {
+    if (!c.geometry) continue;
+    L.geoJSON(c.geometry, { style: { color: CANDIDATE, weight: 2, dashArray: '6 4', fillColor: CANDIDATE, fillOpacity: 0.08, fillRule: 'nonzero' } })
+      .bindTooltip(`${esc(c.title)} (checked, not in the list)`, { sticky: true }).addTo(projectLayer);
+  }
+  [...state.projects.values(), ...state.candidates.values()].forEach(drawGaps);
+  [...state.pairs.values(), ...state.candidatePairs.values()].forEach(drawPair);
+}
+
+// Neighbours (nearby, touching, overlapping) never share a color.
+function assignColors() {
+  state.colors.clear();
+  const list = [...state.projects.values()];
+  for (const p of list) {
+    const used = new Set();
+    for (const q of list) {
+      if (q !== p && state.colors.has(q.slug) && boxesMeet(p.bbox, q.bbox, SETTINGS.NEARBY_PAD_DEG)) used.add(state.colors.get(q.slug));
+    }
+    const free = COLORS.findIndex((_, i) => !used.has(i));
+    state.colors.set(p.slug, free >= 0 ? free : 0);
+  }
+}
+
+function showProject(slug) {
+  fitBox((state.projects.get(slug) || state.candidates.get(slug))?.bbox);
+  const el = document.querySelector(`[data-slug="${CSS.escape(slug)}"]`);
+  if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.style.background = 'var(--bg)';
+            setTimeout(() => { el.style.background = ''; }, 1500); }
+}
+
+// ---------------------------------------------------------------- sidebar
+
+function pairLine(pair, kind) {
+  const icon = kind === 'overlap' ? '<span class="icon-alert" aria-label="Overlap">⚠</span>'
+    : kind === 'minor' ? '<span class="icon-minor" aria-label="Below threshold">◆</span>' : '<span class="muted">—</span>';
+  const isNew = state.candidates.has(pair.a) || state.candidates.has(pair.b) ? '<span class="badge">not in the list</span>' : '';
+  const detail = kind === 'touch' ? 'share a border, no overlap'
+    : `${fmtKm2(pair.km2)} km² overlap · ${fmtPct(pair.pct)}% of the smaller project`;
+  return `<li>${icon}<div class="grow"><div class="title">${esc(title(pair.a))} ↔ ${esc(title(pair.b))}${isNew}</div>
+    <div class="muted">${detail}</div></div><button class="link" data-zoom-pair="${esc(pair.key)}">Zoom</button></li>`;
+}
+
+const allPairs = () => [...state.pairs.values(), ...state.candidatePairs.values()];
+const allGaps = () => [...state.projects.values(), ...state.candidates.values()]
+  .flatMap(p => (p.gaps || []).map((g, i) => ({ p, g, i })));
+const pairsOf = slug => [...state.candidatePairs.values()].filter(p => p.a === slug || p.b === slug);
+const other = (pair, slug) => pair.a === slug ? pair.b : pair.a;
+
+// The summary an organizer needs to decide on a checked project.
+function verdict(c) {
+  const pairs = pairsOf(c.slug);
+  const over = pairs.filter(p => thresholdClass(p) === 'overlap');
+  const minor = pairs.filter(p => thresholdClass(p) === 'minor');
+  const touch = pairs.filter(p => thresholdClass(p) === 'touch');
+  const lines = [];
+  for (const p of over) lines.push(`<div class="verdict bad">⚠ Overlaps ${esc(title(other(p, c.slug)))}: ${fmtKm2(p.km2)} km², ${fmtPct(p.pct)}% of the smaller project <button class="link" data-zoom-pair="${esc(p.key)}">Zoom</button></div>`);
+  c.gaps.forEach((g, i) => lines.push(`<div class="verdict warn">◇ Gap inside: ${fmtKm2(g.km2)} km² not covered by its places <button class="link" data-zoom-gap="${esc(c.slug)}#${i}">Zoom</button></div>`));
+  if (!over.length && !c.gaps.length) lines.push(`<div class="verdict ok">✓ No overlaps or gaps found</div>`);
+  const notes = [];
+  if (minor.length) notes.push(`${minor.length} small overlap${minor.length > 1 ? 's' : ''} below the threshold`);
+  if (touch.length) notes.push(`touches ${touch.map(p => esc(title(other(p, c.slug)))).join(', ')}`);
+  if (notes.length) lines.push(`<div class="muted">${notes.join(' · ')}</div>`);
+  return lines.join('');
+}
+
+function candidateActions(c) {
+  if (!state.auth) return '';
+  if (state.replacing === c.slug) {
+    // projects this one overlaps come first: an updated project usually covers its old version
+    const overlapping = pairsOf(c.slug).filter(p => p.km2 > 0).sort((x, y) => y.km2 - x.km2).map(p => other(p, c.slug))
+      .filter(s => state.projects.has(s));
+    const rest = [...state.projects.values()].filter(p => !overlapping.includes(p.slug)).sort((x, y) => x.title.localeCompare(y.title)).map(p => p.slug);
+    const options = [...overlapping, ...rest].map(s => `<option value="${esc(s)}">${esc(title(s))}${overlapping.includes(s) ? ' (overlaps)' : ''}</option>`).join('');
+    return `<div class="actions"><label class="muted" for="replace-${esc(c.slug)}">Replace</label>
+      <select id="replace-${esc(c.slug)}">${options}</select>
+      <button class="small primary" data-replace-confirm="${esc(c.slug)}" ${state.busy ? 'disabled' : ''}>Replace</button>
+      <button class="small" data-replace-cancel="1">Cancel</button></div>`;
+  }
+  return `<div class="actions">
+    <button class="small primary" data-add="${esc(c.slug)}" ${state.busy ? 'disabled' : ''}>Add to list</button>
+    <button class="small" data-replace="${esc(c.slug)}" ${state.busy || !state.projects.size ? 'disabled' : ''}>Replace a listed project…</button></div>`;
+}
+
+function renderSidebar() {
+  const groups = { overlap: [], minor: [], touch: [] };
+  for (const pair of allPairs()) groups[thresholdClass(pair)].push(pair);
+  for (const g of Object.values(groups)) g.sort((x, y) => y.km2 - x.km2);
+  const gaps = allGaps().sort((x, y) => y.g.km2 - x.g.km2);
+
+  $('stats').innerHTML =
+    `<span class="chip"><b>${state.projects.size}</b> projects in the list</span>` +
+    `<span class="chip ${groups.overlap.length ? 'alert' : ''}"><b>${groups.overlap.length}</b> overlap${groups.overlap.length === 1 ? '' : 's'}</span>` +
+    `<span class="chip"><b>${groups.touch.length}</b> touching</span>` +
+    `<span class="chip ${gaps.length ? 'warn' : ''}"><b>${gaps.length}</b> gap${gaps.length === 1 ? '' : 's'} inside projects</span>`;
+
+  if (state.data?.updatedAt) {
+    const d = new Date(state.data.updatedAt);
+    $('updated').innerHTML = `List last changed ${esc(d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }))}. ` +
+      `Boundaries are re-checked every Monday.`;
+  }
+  $('auth').innerHTML = !REPO ? ''
+    : state.auth ? `Signed in as <b>${esc(state.auth.login)}</b> · <button class="link" id="signOut">Sign out</button>`
+    : `<button class="link" id="signInOpen" style="padding:0">Sign in to add or remove projects</button>`;
+  $('repoName').textContent = REPO;
+
+  $('overlaps').innerHTML =
+    (groups.overlap.length ? `<ul class="list">${groups.overlap.map(p => pairLine(p, 'overlap')).join('')}</ul>`
+      : `<p class="muted">No overlaps above the threshold.</p>`) +
+    `<details><summary>Below threshold (${groups.minor.length})</summary><ul class="list">${groups.minor.map(p => pairLine(p, 'minor')).join('') || '<li class="muted">None</li>'}</ul></details>` +
+    `<details><summary>Touching borders (${groups.touch.length})</summary><ul class="list">${groups.touch.map(p => pairLine(p, 'touch')).join('') || '<li class="muted">None</li>'}</ul></details>`;
+
+  $('gaps').innerHTML = gaps.length
+    ? `<ul class="list">${gaps.map(({ p, g, i }) => `<li><span class="icon-gap" aria-label="Gap">◇</span>
+        <div class="grow"><div class="title">${esc(p.title)}${state.candidates.has(p.slug) ? '<span class="badge">not in the list</span>' : ''}</div>
+        <div class="muted">${fmtKm2(g.km2)} km² surrounded by the project’s places but not in any of them</div></div>
+        <button class="link" data-zoom-gap="${esc(p.slug)}#${i}">Zoom</button></li>`).join('')}</ul>`
+    : `<p class="muted">No gaps found inside any project.</p>`;
+  $('gapNote').textContent = `Gaps are areas of at least ${SETTINGS.GAP_MIN_KM2} km² completely surrounded by a project’s places ` +
+    `but not part of any of them. Areas removed on purpose with an excluded place aren’t counted. ` +
+    `Only projects with more than one place are checked, and gaps open to the outside (a notch in the edge) aren’t detected.`;
+
+  $('candidates').innerHTML = [...state.candidates.values()].map(c => `<li data-slug="${esc(c.slug)}">
+      <span class="swatch candidate"></span><div class="grow"><div class="title">${esc(c.title)}</div>
+      <div class="muted">${c.placeIds.length} place${c.placeIds.length === 1 ? '' : 's'}${c.excludeIds.length ? `, ${c.excludeIds.length} excluded` : ''} ·
+      <a href="https://www.inaturalist.org/projects/${encodeURIComponent(c.slug)}" target="_blank" rel="noopener">iNat</a> ·
+      <button class="link" data-show="${esc(c.slug)}">Zoom</button></div>${verdict(c)}</div>${candidateActions(c)}</li>`).join('');
+  $('clearBtn').hidden = !state.candidates.size;
+
+  const f = $('filter').value.trim().toLowerCase();
+  const list = [...state.projects.values()]
+    .filter(p => !f || p.title.toLowerCase().includes(f) || p.slug.includes(f))
+    .sort((x, y) => x.title.localeCompare(y.title));
+  $('projects').innerHTML = list.map(p => `<li data-slug="${esc(p.slug)}">
+      <span class="swatch" style="background:${COLORS[state.colors.get(p.slug) ?? 0]}"></span>
+      <div class="grow"><div class="title">${esc(p.title)}</div>
+      <div class="muted">${p.placeIds.length} place${p.placeIds.length === 1 ? '' : 's'}${p.excludeIds.length ? `, ${p.excludeIds.length} excluded` : ''}${p.status ? ` · ${esc(p.status)}` : ''} ·
+      <a href="https://www.inaturalist.org/projects/${encodeURIComponent(p.slug)}" target="_blank" rel="noopener">iNat</a></div></div>
+      <button class="link" data-show="${esc(p.slug)}">Zoom</button>
+      ${state.auth ? `<button class="link danger" data-remove="${esc(p.slug)}" ${state.busy ? 'disabled' : ''}>Remove</button>` : ''}</li>`).join('')
+    || `<li class="muted">${state.projects.size ? 'No matches.' : 'No projects yet.'}</li>`;
+
+  const problems = state.data?.problems || [];
+  $('problems').innerHTML = problems.length
+    ? `<details open><summary>In the list but not checked (${problems.length})</summary><ul class="list">${problems.map(p =>
+        `<li><span class="icon-alert">!</span><div class="grow"><div class="title">${esc(p.title || p.slug)}</div>
+        <div class="muted">${esc(p.issue)}</div></div>
+        ${state.auth ? `<button class="link danger" data-remove="${esc(p.slug)}" ${state.busy ? 'disabled' : ''}>Remove</button>` : ''}</li>`).join('')}</ul></details>` : '';
+
+  renderLimits();
+}
+
+function renderLimits() {
+  $('limits').innerHTML =
+    `<b>Limits:</b> up to ${MAX_PROJECTS_PER_CHECK} projects per check. Requests to iNaturalist are paced at 1 per second; ` +
+    `iNat asks for no more than 60 a minute and ${DAILY_REQUEST_BUDGET.toLocaleString()} a day. ` +
+    `${dailyCount().toLocaleString()} used today in this browser` + (queued ? `, ${queued} waiting (about ${queued} s).` : '.');
+  $('checkBtn').disabled = state.busy;
+  $('addHow').innerHTML = state.candidates.size
+    ? (state.auth ? 'Checked projects are compared with everything in the list. Add the ones you approve, or use them to replace an older project.'
+                  : 'Checked projects aren’t saved. Sign in (at the top) to add them to the list.')
+    : '';
+}
+
+function render() { renderMap(); renderSidebar(); }
+
+function banner(html, alert) {
+  const d = document.createElement('div');
+  d.className = 'banner' + (alert ? ' alert' : '');
+  d.innerHTML = `<button class="close" aria-label="Dismiss">×</button>${html}`;
+  d.querySelector('.close').onclick = () => d.remove();
+  $('banners').prepend(d);
+}
+
+// ---------------------------------------------------------------- checking projects
+
+const shapeOf = p => p.shape || (p.shape = { feature: p.geometry ? turf.feature(p.geometry) : null, bbox: p.bbox, km2: p.km2, holes: [] });
+
+async function checkProjects(text) {
+  const { items, skipped } = parseProjectList(text);
+  const listed = items.filter(i => state.projects.has(i.slug));
+  let todo = items.filter(i => !state.projects.has(i.slug) && !state.candidates.has(i.slug));
+  const overLimit = Math.max(0, todo.length - MAX_PROJECTS_PER_CHECK);
+  todo = todo.slice(0, MAX_PROJECTS_PER_CHECK);
+  const report = { checked: [], notFound: [], notCollection: [], noPlaces: [], listed: listed.map(i => i.slug), overlaps: [], gaps: [], error: null };
+  if (!todo.length) { reportCheck(report, skipped, overLimit); return; }
+
+  state.busy = true; renderSidebar();
+  try {
+    const found = await checker.fetchProjects(todo.map(i => i.slug));
+    const ready = [];
+    for (const item of todo) {
+      const r = found.get(item.slug);
+      if (!r) { report.notFound.push(item.slug); continue; }
+      if (state.projects.has(r.slug)) { report.listed.push(r.slug); continue; }   // entered by id
+      if (r.type !== 'collection') { report.notCollection.push(r.title); continue; }
+      if (!r.placeIds.length) { report.noPlaces.push(r.title); continue; }
+      ready.push(r);
+    }
+    await checker.fetchPlaces(ready.flatMap(p => [...p.placeIds, ...p.excludeIds]));
+    for (const c of ready) {
+      const s = checker.buildShape(c);
+      Object.assign(c, { shape: s, geometry: s.feature?.geometry, bbox: s.bbox, km2: s.km2, compared: new Set(), gaps: [], rawGaps: [] });
+      state.candidates.set(c.slug, c);
+    }
+    for (const [i, c] of ready.entries()) {
+      setProgress(`Checking ${c.title} (${i + 1} of ${ready.length})…`);
+      for (const o of [...state.projects.values(), ...state.candidates.values()]) {
+        if (o === c || c.compared.has(o.slug) || o.compared?.has(c.slug)) continue;
+        const pair = await checker.comparePair(c, c.shape, o, shapeOf(o));
+        c.compared.add(o.slug);
+        if (pair) {
+          const saved = { ...pair, geometry: pair.geom };
+          state.candidatePairs.set(pair.key, saved);
+          if (thresholdClass(saved) === 'overlap') report.overlaps.push(saved);
+        }
+      }
+      c.rawGaps = await checker.findGaps(c, c.shape);
+      c.gaps = c.rawGaps.map(g => ({ km2: g.km2, geometry: g.geom }));
+      if (c.gaps.length) report.gaps.push(c);
+      report.checked.push(c);
+    }
+  } catch (e) {
+    report.error = e.message;
+    console.error(e);
+  } finally {
+    state.busy = false;
+    setProgress('');
+    render();
+    reportCheck(report, skipped, overLimit);
+  }
+}
+
+function reportCheck(r, skipped, overLimit) {
+  const parts = [];
+  if (r.overlaps.length) parts.push(`<b>⚠ ${r.overlaps.length} overlap${r.overlaps.length > 1 ? 's' : ''} found.</b>`);
+  if (r.gaps.length) parts.push(`<b>◇ ${r.gaps.length} project${r.gaps.length > 1 ? 's have' : ' has'} a gap inside.</b>`);
+  if (r.checked.length) parts.push(`Checked ${r.checked.length} project${r.checked.length === 1 ? '' : 's'} against the ${state.projects.size} in the list; details are under “Check a project”.` +
+    (r.overlaps.length || r.gaps.length ? '' : ' No overlaps or gaps found.'));
+  if (r.listed.length) parts.push(`Already in the list, so not re-checked: ${r.listed.map(s => esc(title(s))).join(', ')}.`);
+  if (r.notFound.length) parts.push(`Not found on iNaturalist: ${r.notFound.map(esc).join(', ')}.`);
+  if (r.notCollection.length) parts.push(`Skipped (not a collection project): ${r.notCollection.map(esc).join(', ')}.`);
+  if (r.noPlaces.length) parts.push(`No location set, so nothing to compare: ${r.noPlaces.map(esc).join(', ')}.`);
+  if (overLimit) parts.push(`<b>${overLimit} more not checked</b>: the limit is ${MAX_PROJECTS_PER_CHECK} per check. Check them in another round.`);
+  if (skipped.length) parts.push(`Skipped ${skipped.length} row${skipped.length > 1 ? 's' : ''}: ${esc(summarizeSkips(skipped))}.`);
+  if (r.error) parts.push(`<b>Stopped early:</b> ${esc(r.error)}`);
+  if (!parts.length) parts.push('Nothing to check.');
+  banner(parts.join(' '), r.overlaps.length || r.gaps.length || r.error || r.notFound.length);
+}
+
+// ---------------------------------------------------------------- list changes
+
+function addCandidate(slug) {
+  const c = state.candidates.get(slug);
+  const over = pairsOf(slug).filter(p => thresholdClass(p) === 'overlap');
+  const issues = [...over.map(p => `overlaps ${title(other(p, slug))} (${fmtKm2(p.km2)} km²)`),
+                  ...c.gaps.map(g => `has a ${fmtKm2(g.km2)} km² gap inside`)];
+  if (issues.length && !confirm(`${c.title} ${issues.join(' and ')}.\n\nAdd it to the list anyway?`)) return;
+  runSave({ add: [c], message: `Add ${c.title}` }, `Added <b>${esc(c.title)}</b> to the list.`);
+}
+
+function removeProject(slug) {
+  const t = title(slug);
+  if (!confirm(`Remove ${t} from the list?\n\nIt stays on iNaturalist; this only takes it off this map.`)) return;
+  runSave({ remove: [slug], message: `Remove ${t}` }, `Removed <b>${esc(t)}</b> from the list.`);
+}
+
+function replaceWith(slug) {
+  const c = state.candidates.get(slug);
+  const old = $(`replace-${slug}`).value;
+  if (!old || !confirm(`Replace ${title(old)} with ${c.title}?`)) return;
+  runSave({ add: [c], remove: [old], message: `Replace ${title(old)} with ${c.title}` },
+          `Replaced <b>${esc(title(old))}</b> with <b>${esc(c.title)}</b>.`);
+}
+
+// ---------------------------------------------------------------- loading
+
+function loadData(data) {
+  state.data = data;
+  state.projects.clear(); state.pairs.clear();
+  for (const p of data.projects) {
+    state.projects.set(p.slug, p);
+    checker.addPlaceStubs(p.places);
+  }
+  for (const pair of data.pairs) {
+    const key = pairKey(pair.a, pair.b);
+    state.pairs.set(key, { ...pair, key });
+  }
+  assignColors();
+  render();
+}
+
+// Signed-in organizers read straight from the repository, so they see each other's changes at once.
+async function fetchData() {
+  if (state.auth) {
+    try { return JSON.parse(await githubOk(`/repos/${REPO}/contents/data/projects.json?ref=${BRANCH}`, { raw: true })); }
+    catch (e) { console.warn('Falling back to the published data file', e); }
+  }
+  const res = await fetch('data/projects.json', { cache: 'no-cache' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function load() {
+  try {
+    loadData(await fetchData());
+  } catch (e) {
+    banner(`Could not load the project list (data/projects.json): ${esc(e.message)}`, true);
+    loadData({ projects: [], pairs: [], problems: [] });
+  }
+  const boxes = [...state.projects.values()].map(p => p.bbox).filter(Boolean);
+  if (boxes.length) fitBox([Math.min(...boxes.map(b => b[0])), Math.min(...boxes.map(b => b[1])),
+                            Math.max(...boxes.map(b => b[2])), Math.max(...boxes.map(b => b[3]))]);
+}
+
+// ---------------------------------------------------------------- wiring
+
+$('thPct').value = state.threshold.pct;
+$('thKm2').value = state.threshold.km2;
+for (const id of ['thPct', 'thKm2']) $(id).addEventListener('input', () => {
+  state.threshold = { pct: Number($('thPct').value) || 0, km2: Number($('thKm2').value) || 0 };
+  store('cnc-threshold', state.threshold);
+  render();
+});
+$('showMinor').addEventListener('change', renderMap);
+$('filter').addEventListener('input', renderSidebar);
+$('checkBtn').addEventListener('click', async () => {
+  const text = $('input').value;
+  if (!text.trim() || state.busy) return;
+  await checkProjects(text);
+  $('input').value = '';
+});
+$('clearBtn').addEventListener('click', () => {
+  state.candidates.clear(); state.candidatePairs.clear(); state.replacing = null; render();
+});
+$('authForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const token = $('token').value.trim();
+  if (!token) return;
+  try {
+    await signIn(token);
+    $('token').value = ''; $('authForm').hidden = true;
+    banner(`Signed in as <b>${esc(state.auth.login)}</b>. You can now add, remove and replace projects.`);
+    await load();
+  } catch (err) {
+    banner(`<b>Not signed in.</b> ${esc(err.message)}`, true);
+  }
+});
+$('authCancel').addEventListener('click', () => { $('authForm').hidden = true; });
+document.body.addEventListener('click', e => {
+  const t = e.target.closest('button');
+  if (!t) return;
+  if (t.id === 'signInOpen') { $('authForm').hidden = false; $('token').focus(); }
+  if (t.id === 'signOut') signOut();
+  if (t.dataset.zoomPair) {
+    const pair = state.pairs.get(t.dataset.zoomPair) || state.candidatePairs.get(t.dataset.zoomPair);
+    if (pair) fitBox(pair.geometry ? turf.bbox(pair.geometry)
+      : turf.bbox(turf.featureCollection([pair.a, pair.b].map(s => turf.bboxPolygon((state.projects.get(s) || state.candidates.get(s)).bbox)))));
+  }
+  if (t.dataset.zoomGap) {
+    const [slug, i] = t.dataset.zoomGap.split('#');
+    const gap = (state.projects.get(slug) || state.candidates.get(slug))?.gaps?.[Number(i)];
+    if (gap) fitBox(turf.bbox(gap.geometry));
+  }
+  if (t.dataset.show) showProject(t.dataset.show);
+  if (state.busy) return;
+  if (t.dataset.add) addCandidate(t.dataset.add);
+  if (t.dataset.remove) removeProject(t.dataset.remove);
+  if (t.dataset.replace) { state.replacing = t.dataset.replace; renderSidebar(); }
+  if (t.dataset.replaceCancel) { state.replacing = null; renderSidebar(); }
+  if (t.dataset.replaceConfirm) replaceWith(t.dataset.replaceConfirm);
+});
+
+state.auth = REPO ? store('cnc-auth') : null;
+window.cnc = { state, checker };   // for debugging in the browser console
+load();
+</script>
+</body>
+</html>

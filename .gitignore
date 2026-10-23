@@ -1,0 +1,6 @@
+node_modules/
+.cache/
+.DS_Store
+# keep spreadsheets of submissions out of the repository; projects.csv is the only list
+*.xlsx
+*Submissions*.csv
