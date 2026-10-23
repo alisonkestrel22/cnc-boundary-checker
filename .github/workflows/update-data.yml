@@ -50,15 +50,26 @@ jobs:
           path: .cache
           key: boundaries-${{ github.run_id }}
 
+      # If someone saves a change from the page while this runs, these results are out of date:
+      # start again from their change instead of pushing (the boundary cache makes a rebuild quick).
       - name: Commit updated data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/
-          if git diff --cached --quiet; then
-            echo "Boundary data unchanged"
-            exit 0
-          fi
-          git commit -m "Update boundary data"
-          git pull --rebase
-          git push
+          for attempt in 1 2 3; do
+            git add data/
+            if git diff --cached --quiet; then
+              echo "Boundary data unchanged"
+              exit 0
+            fi
+            git commit -q -m "Update boundary data"
+            if git push; then
+              exit 0
+            fi
+            echo "The list changed while this was building; rebuilding from the latest version"
+            git fetch -q origin main
+            git reset -q --hard origin/main
+            node scripts/build.mjs
+          done
+          echo "The list kept changing during the build; the next run will catch up"
+          exit 1
