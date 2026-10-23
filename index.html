@@ -125,10 +125,9 @@
       <div>Signing in lets you add, remove and replace projects. You need a GitHub account with access to
         <span id="repoName"></span>, and a token from it:</div>
       <ol>
-        <li>Open <a id="tokenLink" target="_blank" rel="noopener" href="https://github.com/settings/personal-access-tokens/new">GitHub’s new token page</a>.</li>
-        <li>Under <b>Repository access</b>, choose <b>Only select repositories</b> and pick this repository.</li>
-        <li>Under <b>Permissions → Repository permissions</b>, set <b>Contents</b> to <b>Read and write</b>.</li>
-        <li>Generate the token and paste it here.</li>
+        <li>Open <a id="tokenLink" target="_blank" rel="noopener" href="https://github.com/settings/tokens/new?scopes=public_repo&amp;description=CNC%20boundary%20check">GitHub’s new token (classic) page</a>.</li>
+        <li>Choose an <b>Expiration</b>. Leave <b>public_repo</b> ticked and nothing else.</li>
+        <li>Click <b>Generate token</b>, copy it and paste it here.</li>
       </ol>
       <label for="token" class="muted">GitHub token</label>
       <input type="password" id="token" autocomplete="off" spellcheck="false">
@@ -275,7 +274,7 @@ async function github(path, { method = 'GET', body, raw = false, token = state.a
 
 function githubError(res, path) {
   if (res.status === 401) return new Error('GitHub did not accept your token. It may have expired: sign out and sign in with a new one.');
-  if (res.status === 403 || res.status === 404) return new Error(`Your token can’t change ${REPO}. Check that it has access to this repository with Contents set to Read and write.`);
+  if (res.status === 403 || res.status === 404) return new Error(`Your token can’t change ${REPO}. Check that you’ve accepted the invitation to the repository and that your token has public_repo ticked.`);
   return new Error(`GitHub returned ${res.status} for ${path}.`);
 }
 
@@ -288,7 +287,7 @@ async function githubOk(path, opts) {
 async function signIn(token) {
   const repoRes = await github(`/repos/${REPO}`, { token });
   if (repoRes.status === 401) throw new Error('GitHub did not accept that token. Check that you copied all of it.');
-  if (!repoRes.ok) throw new Error(`That token can’t see ${REPO}. When creating it, choose this repository under Repository access.`);
+  if (!repoRes.ok) throw new Error(`That token can’t see ${REPO}. Make a classic token with public_repo ticked, using the link above.`);
   const repo = await repoRes.json();
   if (repo.permissions && !repo.permissions.push) throw new Error(`Your GitHub account can view ${REPO} but not change it. Ask the repository owner to give you write access.`);
   const userRes = await github('/user', { token });

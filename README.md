@@ -49,14 +49,16 @@ black outline is a project you've checked but not added.
 ## Signing in (each organizer, once)
 
 You need a GitHub account with write access to this repository (the owner adds you under
-**Settings → Collaborators**). Then:
+**Settings → Collaborators**, and you accept the emailed invitation). Then:
 
 1. Click **Sign in to add or remove projects** at the top of the page.
-2. Follow the link to GitHub's new token page. Give the token a name, and an expiry date.
-3. Under **Repository access**, choose **Only select repositories** and pick this repository.
-4. Under **Permissions → Repository permissions**, set **Contents** to **Read and write**.
-   Leave everything else as it is.
-5. Generate the token, copy it, and paste it into the page.
+2. Follow the link to GitHub's new token (classic) page. The name and the **public_repo**
+   permission are filled in already. Choose an expiry date and leave everything else unticked.
+3. Generate the token, copy it, and paste it into the page.
+
+It has to be a classic token: GitHub's fine-grained tokens can't yet change a repository owned by
+another person's account, even for a collaborator. `public_repo` lets the token change public
+repositories you have write access to, which for most organizers is only this one.
 
 The page remembers the token in that browser only. Use **Sign out** on a shared computer. When
 the token expires, the page says so; make a new one the same way.
