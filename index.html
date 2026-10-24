@@ -42,16 +42,29 @@
   body {
     background: var(--bg); color: var(--text);
     font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-    display: grid; grid-template-columns: 420px 1fr; height: 100vh;
+    display: grid; grid-template-columns: var(--side-w, 420px) 6px 1fr; height: 100vh;
   }
-  #side { overflow-y: auto; border-right: 1px solid var(--border); background: var(--surface); }
+  /* the sidebar's top (title, counts, messages, tabs) stays put; each tab's panel scrolls on its own */
+  #side { display: flex; flex-direction: column; min-height: 0; height: 100vh; background: var(--surface); }
+  #sideTop { flex: none; max-height: 50vh; overflow-y: auto; }
+  .panel { flex: 1; min-height: 0; overflow-y: auto; }
+  .panel > section:first-child { border-top: none; }
+  .tabs { display: flex; gap: 2px; padding: 0 10px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none;
+                 padding: 8px 8px 6px; color: var(--text-2); white-space: nowrap; }
+  .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  .tabs .count { font-size: 11px; border-radius: 999px; padding: 0 6px; margin-left: 4px; background: var(--bg); color: var(--text-2); }
+  .tabs .count.alert { background: var(--critical); color: #fff; }
+  .tabs .count.warn { background: var(--warn-ink); color: var(--surface); }
+  #divider { cursor: col-resize; background: var(--border); touch-action: none; }
+  #divider:hover, #divider:focus-visible, #divider.dragging { background: var(--accent); outline: none; }
   #map { height: 100vh; }
   header { padding: 16px 16px 8px; }
   h1 { font-size: 18px; margin: 0 0 8px; }
   h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); margin: 0 0 8px; }
   section { padding: 12px 16px; border-top: 1px solid var(--border); }
   .stats { display: flex; flex-wrap: wrap; gap: 6px; }
-  .chip { border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; font-size: 13px; color: var(--text-2); }
+  .chip { border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; font-size: 13px; color: var(--text-2); background: none; }
   .chip b { color: var(--text); }
   .chip.alert { border-color: var(--critical); color: var(--critical); }
   .chip.alert b { color: var(--critical); }
@@ -110,12 +123,14 @@
   @media (max-width: 800px) {
     body { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
     #map { height: 55vh; order: -1; }
-    #side { border-right: none; overflow: visible; }
+    #divider { display: none; }
+    #side, #sideTop, .panel { height: auto; max-height: none; overflow: visible; }
   }
 </style>
 </head>
 <body>
 <aside id="side">
+  <div id="sideTop">
   <header>
     <h1>CNC boundary check</h1>
     <div class="stats" id="stats"></div>
@@ -139,7 +154,15 @@
     </form>
   </header>
   <div id="banners"></div>
+  <nav class="tabs" role="tablist" aria-label="Sidebar">
+    <button role="tab" id="tab-check" data-tab="check" aria-controls="panel-check">Check</button>
+    <button role="tab" id="tab-issues" data-tab="issues" aria-controls="panel-issues">Overlaps &amp; gaps</button>
+    <button role="tab" id="tab-projects" data-tab="projects" aria-controls="panel-projects">Projects</button>
+    <button role="tab" id="tab-settings" data-tab="settings" aria-controls="panel-settings">Settings</button>
+  </nav>
+  </div>
 
+  <div class="panel" id="panel-check" role="tabpanel" aria-labelledby="tab-check">
   <section>
     <h2>Check a project</h2>
     <textarea id="input" placeholder="Paste project links or slugs, one per line.&#10;&#10;You can also paste rows from the submissions spreadsheet: only rows with a Project Status of Approved or In Umbrella are used."></textarea>
@@ -152,7 +175,9 @@
     <p class="muted" id="addHow"></p>
     <div class="limits" id="limits"></div>
   </section>
+  </div>
 
+  <div class="panel" id="panel-issues" role="tabpanel" aria-labelledby="tab-issues" hidden>
   <section>
     <h2>Overlaps between projects</h2>
     <div id="overlaps"></div>
@@ -163,14 +188,19 @@
     <div id="gaps"></div>
     <p class="muted" id="gapNote"></p>
   </section>
+  </div>
 
+  <div class="panel" id="panel-projects" role="tabpanel" aria-labelledby="tab-projects" hidden>
   <section>
     <h2>Projects in the list</h2>
     <input type="search" id="filter" placeholder="Filter projects">
-    <ul class="list" id="projects"></ul>
+    <div class="muted" id="filterCount" style="margin-top:4px"></div>
     <div id="problems"></div>
+    <ul class="list" id="projects"></ul>
   </section>
+  </div>
 
+  <div class="panel" id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
   <section>
     <h2>Overlap threshold</h2>
     <div>Flag an overlap when it covers at least
@@ -181,7 +211,10 @@
       These settings only change what you see; they are remembered in this browser.</p>
     <label class="muted"><input type="checkbox" id="showMinor"> Show below-threshold overlaps on the map</label>
   </section>
+  </div>
 </aside>
+<div id="divider" role="separator" aria-orientation="vertical" aria-label="Resize the sidebar" tabindex="0"
+     title="Drag to resize the sidebar. Double-click to reset."></div>
 <div id="map"></div>
 
 <script type="module">
@@ -446,7 +479,12 @@ function assignColors() {
 
 function showProject(slug) {
   fitBox((state.projects.get(slug) || state.candidates.get(slug))?.bbox);
-  const el = document.querySelector(`[data-slug="${CSS.escape(slug)}"]`);
+  const listed = !state.candidates.has(slug);
+  showTab(listed ? 'projects' : 'check');
+  const find = () => document.querySelector(`#panel-${listed ? 'projects' : 'check'} [data-slug="${CSS.escape(slug)}"]`);
+  // a project clicked on the map may be hidden by the list's filter
+  if (listed && !find() && $('filter').value) { $('filter').value = ''; renderSidebar(); }
+  const el = find();
   if (el) { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); el.style.background = 'var(--bg)';
             setTimeout(() => { el.style.background = ''; }, 1500); }
 }
@@ -511,10 +549,14 @@ function renderSidebar() {
   const gaps = allGaps().sort((x, y) => y.g.km2 - x.g.km2);
 
   $('stats').innerHTML =
-    `<span class="chip"><b>${state.projects.size}</b> projects in the list</span>` +
-    `<span class="chip ${groups.overlap.length ? 'alert' : ''}"><b>${groups.overlap.length}</b> overlap${groups.overlap.length === 1 ? '' : 's'}</span>` +
-    `<span class="chip"><b>${groups.touch.length}</b> touching</span>` +
-    `<span class="chip ${gaps.length ? 'warn' : ''}"><b>${gaps.length}</b> gap${gaps.length === 1 ? '' : 's'} inside projects</span>`;
+    `<button class="chip" data-tab="projects"><b>${state.projects.size}</b> projects in the list</button>` +
+    `<button class="chip ${groups.overlap.length ? 'alert' : ''}" data-tab="issues"><b>${groups.overlap.length}</b> overlap${groups.overlap.length === 1 ? '' : 's'}</button>` +
+    `<button class="chip" data-tab="issues"><b>${groups.touch.length}</b> touching</button>` +
+    `<button class="chip ${gaps.length ? 'warn' : ''}" data-tab="issues"><b>${gaps.length}</b> gap${gaps.length === 1 ? '' : 's'} inside projects</button>`;
+  const count = (n, cls = '') => n ? ` <span class="count ${cls}">${n}</span>` : '';
+  $('tab-check').innerHTML = 'Check' + count(state.candidates.size);
+  $('tab-issues').innerHTML = 'Overlaps &amp; gaps' + count(groups.overlap.length, 'alert') + count(gaps.length, 'warn');
+  $('tab-projects').innerHTML = 'Projects' + count(state.projects.size) + count((state.data?.problems || []).length, 'alert');
 
   if (state.data?.updatedAt) {
     const d = new Date(state.data.updatedAt);
@@ -561,6 +603,7 @@ function renderSidebar() {
       <button class="link" data-show="${esc(p.slug)}">Zoom</button>
       ${state.auth ? `<button class="link danger" data-remove="${esc(p.slug)}" ${state.busy ? 'disabled' : ''}>Remove</button>` : ''}</li>`).join('')
     || `<li class="muted">${state.projects.size ? 'No matches.' : 'No projects yet.'}</li>`;
+  $('filterCount').textContent = f && list.length ? `Showing ${list.length} of ${state.projects.size}` : '';
 
   const problems = state.data?.problems || [];
   $('problems').innerHTML = problems.length
@@ -585,6 +628,48 @@ function renderLimits() {
 }
 
 function render() { renderMap(); renderSidebar(); }
+
+// ---------------------------------------------------------------- layout: tabs and the sidebar's width
+
+const TABS = ['check', 'issues', 'projects', 'settings'];
+function showTab(name) {
+  if (!TABS.includes(name)) name = 'check';
+  for (const t of TABS) {
+    $(`panel-${t}`).hidden = t !== name;
+    $(`tab-${t}`).setAttribute('aria-selected', String(t === name));
+  }
+  store('cnc-tab', name);
+}
+
+const SIDE_MIN = 300, SIDE_DEFAULT = 420;
+function setSideWidth(px, save) {
+  const w = Math.round(Math.max(SIDE_MIN, Math.min(px, window.innerWidth * 0.75)));
+  document.body.style.setProperty('--side-w', `${w}px`);
+  map.invalidateSize();
+  if (save) store('cnc-side-width', w);
+}
+const divider = $('divider');
+divider.addEventListener('pointerdown', e => {
+  divider.setPointerCapture(e.pointerId);
+  divider.classList.add('dragging');
+  document.body.style.userSelect = 'none';
+});
+divider.addEventListener('pointermove', e => {
+  if (divider.hasPointerCapture(e.pointerId)) setSideWidth(e.clientX);
+});
+divider.addEventListener('pointerup', e => {
+  divider.classList.remove('dragging');
+  document.body.style.userSelect = '';
+  setSideWidth(e.clientX, true);
+});
+divider.addEventListener('dblclick', () => { setSideWidth(SIDE_DEFAULT); store('cnc-side-width', null); });
+divider.addEventListener('keydown', e => {
+  const step = { ArrowLeft: -20, ArrowRight: 20 }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  setSideWidth($('side').getBoundingClientRect().width + step, true);
+});
+window.addEventListener('resize', () => { if (store('cnc-side-width')) setSideWidth(store('cnc-side-width')); });
 
 function banner(html, alert) {
   const d = document.createElement('div');
@@ -750,6 +835,7 @@ $('checkBtn').addEventListener('click', async () => {
   const text = $('input').value;
   if (!text.trim() || state.busy) return;
   await checkProjects(text);
+  showTab('check');
   $('input').value = '';
 });
 $('clearBtn').addEventListener('click', () => {
@@ -774,6 +860,7 @@ document.body.addEventListener('click', e => {
   if (!t) return;
   if (t.id === 'signInOpen') { $('authForm').hidden = false; $('token').focus(); }
   if (t.id === 'signOut') signOut();
+  if (t.dataset.tab) showTab(t.dataset.tab);
   if (t.dataset.zoomPair) {
     const pair = state.pairs.get(t.dataset.zoomPair) || state.candidatePairs.get(t.dataset.zoomPair);
     if (pair) fitBox(pair.geometry ? turf.bbox(pair.geometry)
@@ -794,6 +881,8 @@ document.body.addEventListener('click', e => {
 });
 
 state.auth = REPO ? store('cnc-auth') : null;
+showTab(store('cnc-tab'));
+if (store('cnc-side-width')) setSideWidth(store('cnc-side-width'));
 window.cnc = { state, checker };   // for debugging in the browser console
 load();
 </script>
